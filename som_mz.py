@@ -59,7 +59,7 @@ sm2.codebook.matrix=pca
 #training som
 mapsize = [10,10]
 sm = sompy.sompy.SOMFactory().build(data, mapsize, mask=None, mapshape='planar', lattice='rect', normalization='var', initialization='pca', neighborhood='gaussian', training='batch', name='sompy', component_names=names)
-sm.train(n_job=1, verbose='info', train_rough_len=10, train_finetune_len=5)
+sm.train(n_job=1, verbose=None, train_rough_len=10, train_finetune_len=5)
 
 sm1 = sompy.sompy.SOMFactory().build(data_pre, mapsize, mask=None, mapshape='planar', lattice='rect', normalization='var', initialization='pca', neighborhood='gaussian', training='batch', name='sompy', component_names=name_pre)
 sm1.train(n_job=1, verbose='info', train_rough_len=10, train_finetune_len=5)
@@ -267,11 +267,12 @@ def simple_prediction(data, som, K):
             
         if real.ndim==1:
             real.shape+=(1,)
-        dif.append(((predicted_value-real)))
+        dif.append(np.mean(np.abs(predicted_value-real)))
         prediction.append(predicted_value)
-        print(np.mean(np.abs(predicted_value-real)))
+#        print(np.mean(np.abs(predicted_value-real)))
+        
     return dif, prediction
-dif0, prediction_list=simple_prediction(data_new,sm,13)
+dif0, prediction_list =simple_prediction(data,sm,13)
 dif1, prediction_list1=simple_prediction(data_pre,sm,13)
 dif2, prediction_list2=simple_prediction(data_post,sm,13)
 
@@ -299,61 +300,26 @@ np.mean(acc)
 
 #need to wrap this into a function
 '''evaluation of prediction error'''
-
-#iteration = 4 #total number of prediction
-DFs = []
-accuracy = [] 
-K=10
-key = ['task','median_acc', 'mean_acc','std_acc','p_mean','p_std','real_m','real_std','diff']
-workbook = dict((k, []) for k in key)
-target = [0,1,2,3]
-
-for j in range(len(target)):
-    ind = np.arange(0, data.shape[1])
-    indX = ind[ind != target[j]]
-    real = data_new[:,target[j]]
-    target_feature = np.array([target[j]]) 
-    given_feature = indX
-    new_data= data_new[:,indX]
-    workbook['real_std'].append(np.std(real))
-    workbook['real_m'].append(np.mean(real))
-    predicted_value = sm.predict_by(new_data,target[j], k=K)
-    if predicted_value.ndim ==1:   #incase of predicting one column
-        predicted_value.shape+=(1,)
-    if real.ndim==1:
-        real.shape+=(1,)
-#    workbook['k'].append(K[j])
-    workbook['p_mean'].append(np.mean(predicted_value))
-    workbook['p_std'].append(np.std(predicted_value))
-    for i in range(1):
-        acc=np.zeros(real.shape)
-        acc[:,i]=(1-np.abs((predicted_value[:,i]-real[:,i])/real[:,i]))*100
-        accuracy.append(acc)
-#        print ('predicted task:' + name_pre[target_feature[i]])
-#        print ('median accuracy', np.median(accuracy[-1][:,i]))
-#        print ('mean accuracy', np.mean(accuracy[-1][:,i]))
-#        print ('std accuracy', np.std(accuracy[-1][:,i]))
-#        print ('min accuracy', np.min(accuracy[-1][:,i]))
-#        print ('max accuracy', np.max(accuracy[-1][:,i]))
-        DFs.append(pd.DataFrame({('True Value '+names[target_feature[i]]): real[:,i], 'Predicted Value':predicted_value[:,i]}))
-        workbook['task'].append(names[target_feature[i]])
-        workbook['median_acc'].append(np.median(accuracy[-1][:,i]))
-        workbook['mean_acc'].append(np.mean(accuracy[-1][:,i]))
-        workbook['std_acc'].append(np.std(accuracy[-1][:,i]))
-        workbook['diff'].append(np.mean(np.abs(predicted_value-real)))
-#        fig = plt.figure(); 
-#        
-#        DFs[i].plot(DFs[i].index,DFs[i].columns[:],
-#                       label=names[target_feature[i]],colormap='jet',x_compat=True,style='.-'); 
-#        plt.legend(loc='best',bbox_to_anchor = (1.0, 1.0),fontsize = 'medium')
-#        plt.ylabel('values')
-#        font = {'size'   : 12}
-#        plt.rc('font', **font)
-#        fig.set_size_inches(10,10)
-
-#write results to a csv file
-csv=pd.DataFrame.from_dict(workbook)
-csv.to_csv("/Users/mz/Desktop/prediction.csv")
+def som_val(data, mapsize, k=4, names=names):
+    import numpy as np
+    import sompy
+    from sklearn.model_selection import KFold
+    temp= data.copy() #pass a copy of data so that shuffle doesn't change the original set
+    np.random.shuffle(temp) #reorder the data incaseof any patterns
+    dif_mean=np.zeros((k,data.shape[1]))
+    kf = KFold(n_splits=k)
+    for i, train_index in enumerate(kf.split(temp)):
+        print('Training SOM no.', i+1)
+        data_train = data[train_index[0]]; data_test = data[train_index[1]]
+        print(data_train.shape, data_test.shape)
+        sm = sompy.sompy.SOMFactory().build(data_train, [mapsize,mapsize], mask=None, mapshape='planar', 
+                                            lattice='rect', normalization='var', initialization='pca', 
+                                            neighborhood='gaussian', training='batch', name='sompy',component_names=names)
+        sm.train(n_job=1, verbose=None, train_rough_len=10, train_finetune_len=5)
+        dif, prediction_list=simple_prediction(data_test,sm,5)
+        dif_mean[i,:] = np.mean(np.abs(dif),axis=1).T
+    print(np.mean(dif_mean ,axis=0))
+    return dif_mean
 
 
 
@@ -361,49 +327,47 @@ csv.to_csv("/Users/mz/Desktop/prediction.csv")
 #should be done with k that produces the best prediction results
 #1.train som with data_train 2.bootstrap subset from data_new per puermutation 
 #3.generate prediction 4.calculate difference
-from scipy import stats
-
-repetition=100 # Number of times for resampling subjects
-repetition2 = 1000 #Number of times for shuffling group membership (real & predicted value)
-dif_list=[]
-target = [0,1,2,3];
-
-m1= np.zeros([1,50])#creating a mask that resample 30 subjects from data_new each time
-m2 = np.ones([1,data_new.shape[0]-50])
-m3 = np.append(m1,m2)
-m3.shape+=(1,)
-m3 = ~np.any(m3,axis=1) 
-
-for n in range(len(target)):
-    dif=[];  
-    ind = np.arange(0, data.shape[1])
-    indX = ind[ind != target[n]]
-    target_feature = np.array([target[n]]) 
-    given_feature = indX
-    for i in range(repetition):    
-        data_subset = data_new[np.random.permutation(m3)] #bootstrapping
-        real = data_subset[:,target[n]]
-        new_data= data_subset[:,indX]   
-    #    x_train = sm.codebook.matrix[:, given_feature]
-    #    y_train = sm.codebook.matrix[:, target_feature] 
-    #    forest = RandomForestRegressor(n_estimators = 5000,random_state = 0, n_jobs=-1)
-    #    forest.fit(x_train,y_train)
-    #    normalized_new = sm._normalizer.normalize_by(sm.data_raw[:, given_feature], new_data)
-    #    predicted = forest.predict(normalized_new)
-    #    t1  = sm._normalizer.denormalize_by(sm.data_raw[:, target_feature], predicted)
-        #t1 = sm.predict_by(new_data,target, k=9) #wt='uniform' or 'distance'(default)
-        t1 = sm.predict_by(new_data,target[n], k=5) 
-        t2 = real
-        #perm1 = np.random.permutation(t1)
-        #perm2 = np.random.permutation(t2)
-        #dif.append(np.abs(np.mean(perm1)-np.mean(perm2))) #would be the same if t1 isn't changed
-        
-        for j in range(repetition2):
-            dif.append(np.mean(np.abs(np.random.permutation(t1)-t2))) #element by element substraction then average
+def perm_distribution(data, knn = 10, rep1 =10, rep2 = 1000):
+    repetition=rep1 # Number of times for resampling subjects and retraining SOM
+    repetition2 = rep2 #Number of times for shuffling group membership (real & predicted value)
+    target = np.arange(data.shape[1]);
+    temp= data.copy() #pass a copy of data so that shuffle doesn't change the original set
+    diflist=[]
+    for i in target:
+        diflist.append([])
+    dif_reallist = []
+    for i in range(repetition):
+        m1= np.ones([int(temp.shape[0]*4/5),1])#creating a mask that resample 20% of subjects each time
+        m2 = np.zeros([temp.shape[0] - m1.shape[0],1])
+        m3 = np.append(m1,m2,axis=0)
+        np.random.shuffle(m3) #resample different subjects each time
+        mask_train = np.any(m3, axis=1); mask_test = ~np.any(m3,axis=1)
+        data_train = data[mask_train]; data_test = data[mask_test]
+        sm = sompy.sompy.SOMFactory().build(data_train, [10,10], mask=None, mapshape='planar', 
+                                            lattice='rect', normalization='var', initialization='pca', 
+                                            neighborhood='gaussian', training='batch', name='sompy',component_names=names)
+        sm.train(n_job=1, verbose=None, train_rough_len=10, train_finetune_len=5)
+        dif_real, prediction_list = simple_prediction(data_test,sm,knn)
+        dif_reallist.append(dif_real)        
+        dif_list=[]
+        for n in target:
+            dif=[];  
+            ind = np.arange(0, data.shape[1])
+            indX = ind[ind != target[n]]
+            real = data_test[:,target[n]]
+            new_data= data_test[:,indX]   
+            t1 = sm.predict_by(new_data,target[n], k=knn) 
+            t2 = real   
+            for j in range(repetition2):  
+                dif.append(np.mean(np.abs(np.random.permutation(t1)-t2))) #element by element substraction then average
+            dif_list.append(dif)
+            
+        [x.extend(y) for x,y in zip(diflist,dif_list)]
+    [x.sort() for x in diflist] #dif needs to be a list, norm.pdf doesn't work well with np array
+    real_prediction = np.array(dif_reallist)
+    return diflist, real_prediction
     
-    
-    dif.sort()#dif needs to be a list, norm.pdf doesn't work well with np array
-    dif_list.append(dif)
+distribution, real_prediction = perm_distribution(data)
 
 def plot_distribution(dif_list, dif_list2=None):
     import seaborn as sns
@@ -516,7 +480,7 @@ plt.title('Top-down RDM - complex span')
 plt.show()
 
 """
-cakcukate RDM using mutual information
+calculate RDM using mutual information
 """
 # number of bins affects results 
 def calc_MI(x, y, bins):
@@ -575,7 +539,7 @@ RDM_relatedness_test(cov1,cov2,cov_top)
 plot spring graph
 """
 
-def RDM_springplot(m1,m2,m3=None):
+def RDM_springplot(m1,m2=None,m3=None):
     import networkx as nx
     G=nx.from_numpy_matrix(m1)   # this would be the dissimilarity matrix from your analysis
     #fixed the first node at (0.5,0.5)
@@ -584,12 +548,12 @@ def RDM_springplot(m1,m2,m3=None):
     nx.draw_networkx_labels(G,position,labels={0:'DR',1:'DM',2:'BDR' ,3:'MrX'})
     nx.draw_networkx_edges(G, position, width=0.5,alpha=0.5,edge_shape='-')
 
-    
-    G2=nx.from_numpy_matrix(m2)   
-    position2=nx.spring_layout(G2,fixed=[1],pos={0:[0.5,0.5],1:[0,0],2:[0,1] ,3:[1,1]})
-    nx.draw_networkx_nodes(G2, position2, node_color='g',node_shape='^',alpha=0.4,node_size=200,label='post')
-    nx.draw_networkx_labels(G2,position2,labels={0:'DR',1:'DM',2:'BDR' ,3:'MrX'})
-    nx.draw_networkx_edges(G2, position2, width=0.5,alpha=0.5)
+    if m2 is not None:
+        G2=nx.from_numpy_matrix(m2)   
+        position2=nx.spring_layout(G2,fixed=[1],pos={0:[0.5,0.5],1:[0,0],2:[0,1] ,3:[1,1]})
+        nx.draw_networkx_nodes(G2, position2, node_color='g',node_shape='^',alpha=0.4,node_size=200,label='post')
+        nx.draw_networkx_labels(G2,position2,labels={0:'DR',1:'DM',2:'BDR' ,3:'MrX'})
+        nx.draw_networkx_edges(G2, position2, width=0.5,alpha=0.5)
     if m3!=None:
         G3=nx.from_numpy_matrix(m3)   
         position3=nx.spring_layout(G3,fixed=[0],pos={0:[0.5,0.5],1:[0,0],2:[0,1] ,3:[1,1]})
@@ -597,7 +561,7 @@ def RDM_springplot(m1,m2,m3=None):
         nx.draw_networkx_labels(G3,position3,labels={0:'DR',1:'DM',2:'BDR' ,3:'MrX'})
     plt.axis('off')
     plt.legend()
-RDM_springplot(1-cov1,1-cov2) #1-RDM
+RDM_springplot(1-cov) #1-RDM
 
 """
 top-down RDMs
